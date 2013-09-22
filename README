@@ -1,0 +1,28 @@
+"SerialPort Android" is a library which goals is to improve and add ease of access to serial devices and USB<>RS232 devices under Android OS.
+It's goal is to provide a huge unification of several serial chip providers under a single, easy to use class/object.
+
+We plan into having no need to root Android's devices and to be able to target as much as SDK versions as possible.
+Currently we support from API 13 to API 17 (tests are under in progress with API 18).
+Meaning we support from Android 3.2 to Android 4.2.2.
+
+#todo (by priority and possibility)#
+* Add support to prolific devices.
+* Improve unification of serial device.
+* Add automatic class instantiation; including finding the serials ports and returning back the final usable object.
+* Add support to several others devices/manufacturers.
+
+#Changelog#
+v0.6: GPL licensing for GitHub and initial commit.
+v0.5: full support for FTDI devices without root.
+v0.4: stability and performance improvement.
+v0.3: RXTX inspiration: goal is to offer same developper experience on android than on Standard JAVA or .Net Framework one.
+v0.2: events handling
+v0.1: initial Library design for generic Serial devices.
+
+Each page can have a:
+SortOrder
+Draft State
+Custom Title (otherwise the filename is used)
+A multilingual application configuration (todo: finish that)
+
+Everything is under copyright 2013 by Meï-Garino Jérémy unless specific file stated.
