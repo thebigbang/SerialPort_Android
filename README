@@ -19,10 +19,4 @@ v0.3: RXTX inspiration: goal is to offer same developper experience on android t
 v0.2: events handling
 v0.1: initial Library design for generic Serial devices.
 
-Each page can have a:
-SortOrder
-Draft State
-Custom Title (otherwise the filename is used)
-A multilingual application configuration (todo: finish that)
-
 Everything is under copyright 2013 by Meï-Garino Jérémy unless specific file stated.
