@@ -14,7 +14,7 @@
  * along with Foobar.  If not, see <http://www.gnu.org/licenses/>.
  *  
  * Copyright (c) Meï-Garino Jérémy 
-*/
+ */
 package com.thebigbang;
 
 import java.io.IOException;
@@ -28,6 +28,8 @@ import android.util.Log;
 
 import com.ftdi.j2xx.D2xxManager;
 import com.ftdi.j2xx.FT_Device;
+import java.nio.ByteBuffer;
+import tw.com.prolific.driver.pl2303.PL2303Driver;
 
 /**
  * The objective of this library is to provide an unification of several serial
@@ -43,7 +45,10 @@ import com.ftdi.j2xx.FT_Device;
  * parts are directly copied from RXTX Library.
  *
  * @author Jeremy.Mei-Garino
- * @version 1.0
+ * @version 1.1 todo: add static initializer detecting automatically driver to
+ * use.
+ * Changelog:
+ *  v1.1: added support to prolific devices in a basic way but enabling full support in the same way as ftdi chips.
  */
 public class SerialPort {
 
@@ -59,7 +64,8 @@ public class SerialPort {
     private boolean monThreadisInterrupted = true;
     private boolean MonitorThreadAlive = false;
     // private boolean MonitorThreadLock = true;
-    final private FT_Device self;
+    final private FT_Device self_ftdi;
+    final private PL2303Driver self_prolific;
     // private SerialPort self;
     /**
      * Serial Port Event listener
@@ -77,21 +83,42 @@ public class SerialPort {
         return new SerialPort(d, baudRate);
     }
 
+    /**
+     * FTDI device serial instantiation.
+     *
+     * @param d
+     * @param b
+     */
     private SerialPort(FT_Device d, int b) {
         // super(parentContext, usbManager, dev, itf);
         portName = d.getDeviceInfo().location + "";
-        self = d;
+        self_ftdi = d;
+        self_prolific = null;
+        baudRate = b;
+    }
+
+    /**
+     * prolific device serial instantiation.
+     *
+     * @param d
+     * @param b
+     */
+    private SerialPort(PL2303Driver d, int b) {
+        // super(parentContext, usbManager, dev, itf);
+        portName = "Prolific Serial";
+        self_prolific = d;
+        self_ftdi = null;
         baudRate = b;
     }
 
     public boolean setBaudRate(int b) {
         baudRate = b;
-        return self.setBaudRate(b);
+        return self_ftdi.setBaudRate(b);
     }
 
     public void notifyOnDataAvailable(boolean enable) {
         monThread.Data = enable;
-        self.setEventNotification(D2xxManager.FT_EVENT_RXCHAR);
+        self_ftdi.setEventNotification(D2xxManager.FT_EVENT_RXCHAR);
     }
 
     /**
@@ -161,8 +188,8 @@ public class SerialPort {
                     continue;
                 }
                 long event = 0;
-                synchronized (self) {
-                    event = self.getEventStatus();
+                synchronized (self_ftdi) {
+                    event = self_ftdi.getEventStatus();
                 }
                 if (event < 0) {
                     // error in here...
@@ -226,7 +253,7 @@ public class SerialPort {
     class SerialOutputStream extends OutputStream {
 
         /**
-         * Always throw IOException /!\Not working in Android yet.
+         * Write an int as a 4 values byte array into the serial Port.
          *
          * @param b
          * @throws IOException
@@ -239,8 +266,8 @@ public class SerialPort {
             if (monThreadisInterrupted == true) {
                 return;
             }
-            synchronized (self) {
-                throw new IOException();
+            synchronized (self_ftdi) {
+                write(ByteBuffer.allocate(4).putInt(b).array(), 0, 4);
             }
         }
 
@@ -265,9 +292,11 @@ public class SerialPort {
         }
 
         /**
-         * @param b []
-         * @param off
-         * @param len
+         * Write the byte array into the serial port.
+         *
+         * @param b [] the array to write
+         * @param off the starting index
+         * @param len the length to write (will be from startingIndex + length)
          * @throws IOException
          */
         @Override
@@ -327,9 +356,13 @@ public class SerialPort {
                      */
                     @Override
                     public void run() {
-                        synchronized (self) {
+                        synchronized (self_ftdi) {
                             Log.i(Tag, "writing on " + Thread.currentThread().getName() + " thread");
-                            self.write(_fullData, _length);
+                            if (self_ftdi != null) {
+                                self_ftdi.write(_fullData, _length);
+                            } else if (self_prolific != null) {
+                                self_prolific.write(_fullData, _length);
+                            }
                         }
                         Thread.yield();
                     }
@@ -347,7 +380,11 @@ public class SerialPort {
                 }
                 // we seems to already be on our own thread and should then be
                 // able to directly write...
-                self.write(send, len);
+                if (self_ftdi != null) {
+                    self_ftdi.write(send, len);
+                } else if (self_prolific != null) {
+                    self_prolific.write(send, len);
+                }
             }
             monThread.Resume();
         }
@@ -362,8 +399,8 @@ public class SerialPort {
             if (monThreadisInterrupted == true) {
                 return;
             }
-            synchronized (self) {
-                self.purge((byte) 2);
+            synchronized (self_ftdi) {
+                self_ftdi.purge((byte) 2);
             }
         }
     }
@@ -430,7 +467,7 @@ public class SerialPort {
         /**
          * @param b []
          * @param off
-         * @param len
+         * @param len the length to read. We warned that this parameter can be ignored depending on host device.
          * @return int number of bytes read
          * @throws IOException
          *
@@ -475,7 +512,7 @@ public class SerialPort {
                  * to avoid blocking) Read may return earlier depending of the
                  * receive time out.
                  */
-                int a = self.getQueueStatus();// nativeavailable();
+                int a = self_ftdi.getQueueStatus();// nativeavailable();
                 if (a == 0) {
                     Minimum = 1;
                 } else {
@@ -536,7 +573,10 @@ public class SerialPort {
                      */
                     @Override
                     public void run() {
-                        _result = self.read(_fullData, _Minimum);
+                        if(self_ftdi!=null)
+                            _result = self_ftdi.read(_fullData, _Minimum);
+                        else if(self_prolific!=null)
+                        _result = self_prolific.read(_fullData);    
                         InternalReadingThread r = (InternalReadingThread) Thread
                                 .currentThread();
                         r.FinalResult = _result;
@@ -552,7 +592,12 @@ public class SerialPort {
             } else {
                 // we seems to already be on our own thread and should then be
                 // able to directly read...
-                result = self.read(fullData, Minimum);
+                if(self_ftdi!=null)
+                result = self_ftdi.read(fullData, Minimum);
+                else if(self_prolific!=null)
+                    result = self_prolific.read(fullData);
+                //defaulting to 0 if no devices...
+                else result=0;
             }
             monThread.Resume();
             for (int i = 0; i < Minimum; i++) {
@@ -613,7 +658,8 @@ public class SerialPort {
                  * to avoid blocking) Read may return earlier depending of the
                  * receive time out.
                  */
-                int a = self.getQueueStatus();// nativeavailable();
+                int a=self_ftdi!=null?self_ftdi.getQueueStatus():0;
+                
                 if (a == 0) {
                     Minimum = 1;
                 } else {
@@ -645,7 +691,8 @@ public class SerialPort {
         }
 
         /**
-         * Simply call {@link self.#getQueueStatus() selfgetQueueStatus()}
+         * Simply call {@link self.#getQueueStatus() selfgetQueueStatus()} on possible devices.
+         * otherwise will return 0 in case of error and a -1 in case of unsupported function for current device.
          *
          * @return int bytes available
          * @throws IOException
@@ -655,7 +702,7 @@ public class SerialPort {
             if (monThreadisInterrupted == true) {
                 return (0);
             }
-            return self.getQueueStatus();
+            return self_ftdi!=null?self_ftdi.getQueueStatus():-1;
         }
     }
 
@@ -663,7 +710,10 @@ public class SerialPort {
      * Close our SerialPort device.
      */
     public void close() {
-        self.close();
+        if(self_ftdi!=null)
+        self_ftdi.close();
+        if(self_prolific!=null)
+            self_prolific.end();
     }
     /**
      * Always At 0... because not used at the moment.
