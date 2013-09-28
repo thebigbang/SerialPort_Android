@@ -17,6 +17,10 @@
  */
 package com.thebigbang;
 
+import android.content.Context;
+import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbDeviceConnection;
+import android.hardware.usb.UsbManager;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -25,10 +29,13 @@ import java.util.TooManyListenersException;
 import android.os.AsyncTask;
 import android.os.Looper;
 import android.util.Log;
+import android.widget.Toast;
 
 import com.ftdi.j2xx.D2xxManager;
 import com.ftdi.j2xx.FT_Device;
 import java.nio.ByteBuffer;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import tw.com.prolific.driver.pl2303.PL2303Driver;
 
 /**
@@ -43,13 +50,20 @@ import tw.com.prolific.driver.pl2303.PL2303Driver;
  * inspiration from: http://code.google.com/p/nrjavaserial/source
  * /browse/trunk/nrjavaserial/src/main/java/gnu/io/RXTXPort.java Note: some
  * parts are directly copied from RXTX Library.
+ * <br/>
+ * todo: add static initializer detecting automatically driver to use.
+ * <br/><b>Changelog: </b>
+ * <br/>
+ * v1.1: added support to prolific devices in a basic way but enabling full
+ * support in the same way as ftdi chips.
+ * <br/>
+ * v1.2: add auto instantiation of the class selecting automatically the driver
+ * and configuring the SerialPort object. Added {@link SerialPortConfig} class.
  *
  * @author Jeremy.Mei-Garino
- * @version 1.1 todo: add static initializer detecting automatically driver to
- * use.
- * Changelog:
- *  v1.1: added support to prolific devices in a basic way but enabling full support in the same way as ftdi chips.
+ * @version 1.2
  */
+@SuppressWarnings("CallToThreadYield")
 public class SerialPort {
 
     private static final String Tag = "SerialPortLib";
@@ -76,7 +90,91 @@ public class SerialPort {
      */
     private MonitorThread monThread;
 
+    /**
+     * Automatic initializer, returning null at the moment.
+     *
+     * @since 1.2
+     * @param ctx the Context
+     * @param config the SerialPort's configuration object.
+     * @param uDev unused right now
+     * @param uDevCon unused right now
+     * @return
+     */
+    public static SerialPort AutomaticInit(Context ctx, SerialPortConfig config, UsbDevice uDev, UsbDeviceConnection uDevCon) {
+        //will first try for FTDI devices:
+        try {
+            D2xxManager ftdi_manager = D2xxManager.getInstance(ctx);
+            if (!ftdi_manager.setVIDPID(0x0403, 0xada1)) {
+                Log.i("ftd2xx-java", "setVIDPID Error");
+                throw new D2xxManager.D2xxException();
+            }
+            //open-up devices with count:
+            int DevCount = ftdi_manager.createDeviceInfoList(ctx);
+            if (DevCount > 0) {
+
+                FT_Device ftDev = ftdi_manager.openByIndex(ctx, 0);
+                if (ftDev == null) {
+                    throw new D2xxManager.D2xxException("ftdi devices are null");
+                }
+
+                if (true == ftDev.isOpen()) {
+                    Toast.makeText(ctx,
+                            "devCount:" + DevCount + " open index:" + 0,
+                            Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(ctx, "Need to get permission!", Toast.LENGTH_SHORT)
+                            .show();
+                }
+                ftDev.setBaudRate(config.baudRate);
+                ftDev.setDataCharacteristics(config.dataBits, config.stopBits, config.parity);
+                ftDev.setFlowControl(config.flowCtrlSetting, (byte) 0x0b, (byte) 0x0c);
+                return new SerialPort(ftDev, config.baudRate);
+            } else {
+                Log.e("j2xx", "DevCount <= 0");
+            }
+        } catch (D2xxManager.D2xxException ex) {
+            Log.i("SerialPort", "Auto initialisation failed for FTDI device");
+            Logger.getLogger(SerialPort.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        //end of FTDI auto instantiation.
+        //begin of Profilic device instantiation.
+        PL2303Driver prolific = new PL2303Driver((UsbManager) ctx.getSystemService(Context.USB_SERVICE), ctx, Tag);
+        if (prolific.isConnected()) {
+            try {
+                prolific.setup(config.convertToProlificBaudRate(), config.convertToProlificDataBits(), config.convertToProlificStopBits(), config.convertToProlificParity(), config.convertToProlificFlowControl());
+            } catch (IOException ex) {
+                Logger.getLogger(SerialPort.class.getName()).log(Level.SEVERE, null, ex);
+            }
+            return new SerialPort(prolific, config.baudRate);
+        }
+        //no compatible devices found will return null.
+        return null;
+    }
+
+    /**
+     * FTDI devices initializer. Will return null if no device. should be
+     * deprecated but we will see that when we will be on v1.4
+     *
+     * @param d
+     * @param baudRate
+     * @return
+     */
     public static SerialPort Init(FT_Device d, int baudRate) {
+        if (d == null) {
+            return null;
+        }
+        return new SerialPort(d, baudRate);
+    }
+
+    /**
+     * Prolific devices initializer. Will return null if no device. should be
+     * deprecated but we will see that when we will be on v1.4
+     *
+     * @param d
+     * @param baudRate
+     * @return
+     */
+    public static SerialPort Init(PL2303Driver d, int baudRate) {
         if (d == null) {
             return null;
         }
@@ -86,8 +184,8 @@ public class SerialPort {
     /**
      * FTDI device serial instantiation.
      *
-     * @param d
-     * @param b
+     * @param d device
+     * @param b baudRate
      */
     private SerialPort(FT_Device d, int b) {
         // super(parentContext, usbManager, dev, itf);
@@ -187,7 +285,7 @@ public class SerialPort {
                 if (isPaused) {
                     continue;
                 }
-                long event = 0;
+                long event;
                 synchronized (self_ftdi) {
                     event = self_ftdi.getEventStatus();
                 }
@@ -467,7 +565,8 @@ public class SerialPort {
         /**
          * @param b []
          * @param off
-         * @param len the length to read. We warned that this parameter can be ignored depending on host device.
+         * @param len the length to read. We warned that this parameter can be
+         * ignored depending on host device.
          * @return int number of bytes read
          * @throws IOException
          *
@@ -573,10 +672,11 @@ public class SerialPort {
                      */
                     @Override
                     public void run() {
-                        if(self_ftdi!=null)
+                        if (self_ftdi != null) {
                             _result = self_ftdi.read(_fullData, _Minimum);
-                        else if(self_prolific!=null)
-                        _result = self_prolific.read(_fullData);    
+                        } else if (self_prolific != null) {
+                            _result = self_prolific.read(_fullData);
+                        }
                         InternalReadingThread r = (InternalReadingThread) Thread
                                 .currentThread();
                         r.FinalResult = _result;
@@ -592,12 +692,14 @@ public class SerialPort {
             } else {
                 // we seems to already be on our own thread and should then be
                 // able to directly read...
-                if(self_ftdi!=null)
-                result = self_ftdi.read(fullData, Minimum);
-                else if(self_prolific!=null)
+                if (self_ftdi != null) {
+                    result = self_ftdi.read(fullData, Minimum);
+                } else if (self_prolific != null) {
                     result = self_prolific.read(fullData);
-                //defaulting to 0 if no devices...
-                else result=0;
+                } //defaulting to 0 if no devices...
+                else {
+                    result = 0;
+                }
             }
             monThread.Resume();
             for (int i = 0; i < Minimum; i++) {
@@ -658,8 +760,8 @@ public class SerialPort {
                  * to avoid blocking) Read may return earlier depending of the
                  * receive time out.
                  */
-                int a=self_ftdi!=null?self_ftdi.getQueueStatus():0;
-                
+                int a = self_ftdi != null ? self_ftdi.getQueueStatus() : 0;
+
                 if (a == 0) {
                     Minimum = 1;
                 } else {
@@ -691,8 +793,9 @@ public class SerialPort {
         }
 
         /**
-         * Simply call {@link self.#getQueueStatus() selfgetQueueStatus()} on possible devices.
-         * otherwise will return 0 in case of error and a -1 in case of unsupported function for current device.
+         * Simply call {@link self.#getQueueStatus() selfgetQueueStatus()} on
+         * possible devices. otherwise will return 0 in case of error and a -1
+         * in case of unsupported function for current device.
          *
          * @return int bytes available
          * @throws IOException
@@ -702,7 +805,7 @@ public class SerialPort {
             if (monThreadisInterrupted == true) {
                 return (0);
             }
-            return self_ftdi!=null?self_ftdi.getQueueStatus():-1;
+            return self_ftdi != null ? self_ftdi.getQueueStatus() : -1;
         }
     }
 
@@ -710,10 +813,12 @@ public class SerialPort {
      * Close our SerialPort device.
      */
     public void close() {
-        if(self_ftdi!=null)
-        self_ftdi.close();
-        if(self_prolific!=null)
+        if (self_ftdi != null) {
+            self_ftdi.close();
+        }
+        if (self_prolific != null) {
             self_prolific.end();
+        }
     }
     /**
      * Always At 0... because not used at the moment.
